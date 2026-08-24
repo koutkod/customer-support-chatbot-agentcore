@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Customer Support Chatbot - evaluation resources.
+  Creates the S3 bucket that holds the generate-eval-dataset.py JSONL output
+  and the Bedrock Evaluations results, plus the service role Bedrock
+  Evaluations assumes to read/write that bucket and invoke the judge model.
+  Deploy with:
+    aws cloudformation deploy --template-file cloudformation-testing.yaml \
+      --stack-name bug-report-testing-stack --capabilities CAPABILITY_NAMED_IAM \
+      --region us-east-1
+
+Resources:
+  EvaluationBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-${AWS::AccountId}-eval"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  EvaluationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-eval-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:evaluation-job/*"
+      Policies:
+        - PolicyName: EvaluationBucketAndJudgeModel
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadWriteEvalBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:AbortMultipartUpload
+                  - s3:ListBucketMultipartUploads
+                Resource:
+                  - !GetAtt EvaluationBucket.Arn
+                  - !Sub "${EvaluationBucket.Arn}/*"
+              - Sid: InvokeJudgeModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  # Pinned to the same Nova Pro cross-region profile used
+                  # everywhere else in this project (see system_prompt.txt /
+                  # create_harness.py). Swap this if you pick a different
+                  # judge model.
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0"
+                  - "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0"
+                  - "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0"
+                  - "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
+
+Outputs:
+  EvaluationBucketName:
+    Description: S3 bucket for eval JSONL input/output
+    Value: !Ref EvaluationBucket
+
+  EvaluationServiceRoleArn:
+    Description: Role Bedrock Evaluations assumes for the evaluation job
+    Value: !GetAtt EvaluationServiceRole.Arn
