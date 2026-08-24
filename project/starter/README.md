@@ -37,6 +37,15 @@ If you want to tweak the prompt afterwards: edit `system_prompt.txt` (and/or `on
 
 To tear everything down: `python cleanup_agentcore.py` (harness + gateway target + gateway), then `aws cloudformation delete-stack` for both stacks.
 
+## Screenshots (mapped to the review feedback)
+
+The rubric this got reviewed against still asks for classic Bedrock Flow artifacts (see "About the rubric" below for why that doesn't exist here). Mapping each ask onto what's actually built:
+
+- **Flow diagram** → [`screenshots/flow-diagram.png`](screenshots/flow-diagram.png) — the routing logic is entirely inside `system_prompt.txt` (Steps 1–4), so this is a diagram of that: classify into exactly one route, then the Bug Report / Platform Question / Other Request paths and where they converge on the human hand-off line.
+- **Bug-report DynamoDB table** → [`screenshots/dynamodb-bug-report-table.png`](screenshots/dynamodb-bug-report-table.png) — `bug-report-tool-stack-bug-reports`, showing the 6 tickets filed by `create_bug_report` during testing.
+- **Flow test responses, covered and uncovered question** → [`screenshots/harness-test-covered-and-uncovered-question.png`](screenshots/harness-test-covered-and-uncovered-question.png) — both run live from the AgentCore Harness playground, same wording as `harness-tests.json`: "What shipping options do you offer?" (covered by the FAQ, answered directly) and "Do you have a physical store in Chicago I can visit to try things on?" (not covered, correctly hands off instead of guessing).
+- **Bedrock Evaluation job results page** → [`screenshots/bedrock-evaluation-job-results.png`](screenshots/bedrock-evaluation-job-results.png) — job `foboypqrh6sw` (`customer-support-chatbot-eval-9a0018e2`), the second eval run discussed in Written observations below.
+
 ## About the rubric
 
 Heads up for whoever's grading this — I want to flag something before you get into the code. There are two different versions of this project's instructions floating around, and they don't match.
