@@ -1,0 +1,42 @@
+{
+  "_readme": [
+    "Copy this file to harness-tests.json and fill in your own test cases.",
+    "Each test is one conversation run against the harness in its own session.",
+    "Fields:",
+    "  id               - unique short identifier, used in output filenames/logs",
+    "  route            - one of: bug_report | platform_question | other_request  (which of the three system-prompt routes this exercises)",
+    "  category         - short label used as the 'category' field in the eval JSONL (e.g. BugReport, FAQ-Covered, FAQ-Uncovered, OtherRequest, EdgeCase)",
+    "  turns            - array of customer messages sent in order, in one session; use more than one entry to test multi-turn info collection",
+    "  expectedBehavior - a written description (or example ideal reply) of what the assistant should do on the FINAL turn; used as the referenceResponse an LLM judge grades against",
+    "Cover all three routes, plus edge cases (ambiguous messages, very short messages, prompt injection attempts) for the stand-out criteria."
+  ],
+  "tests": [
+    {
+      "id": "example-bug-report",
+      "route": "bug_report",
+      "category": "BugReport",
+      "turns": [
+        "The checkout page crashes when I click the Pay button"
+      ],
+      "expectedBehavior": "Ask one question at a time for the missing stepsToReproduce and environment fields, then call create_bug_report with all three fields once collected, and relay the returned ticket ID to the customer."
+    },
+    {
+      "id": "example-platform-question",
+      "route": "platform_question",
+      "category": "FAQ-Covered",
+      "turns": [
+        "What shipping options do you offer?"
+      ],
+      "expectedBehavior": "Answer using only the FAQ's Shipping section: Standard (5-7 business days, free over $50 / $4.99 otherwise), Express (2-3 business days, $12.99), and Next-Day (before 12pm local time, $24.99)."
+    },
+    {
+      "id": "example-other-request",
+      "route": "other_request",
+      "category": "OtherRequest",
+      "turns": [
+        "Can you connect me with a manager about a billing dispute?"
+      ],
+      "expectedBehavior": "Politely explain this can't be handled in chat and direct the customer to call the human support line at 1-800-555-0199."
+    }
+  ]
+}
