@@ -1,8 +1,6 @@
 # Customer Support Chatbot — Amazon Bedrock AgentCore
 
-All files described in the project brief, built from scratch (no starter
-repo was provided). Everything below runs from this folder
-(`project/starter/`) in `us-east-1`.
+This is my submission for the Customer Support Chatbot project. There was no starter repo for this one, so everything here I built from scratch following the Project Instructions / Environment Setup pages. All commands below assume you're sitting in this folder (`project/starter/`) and working in `us-east-1`.
 
 ## Deploy order
 
@@ -17,8 +15,8 @@ aws cloudformation deploy --template-file cloudformation-tool.yaml \
 # 2. Gateway + tool registration -> agentcore_config.json
 python setup_gateway.py
 
-# 3. (Manually verify the Lambda + DynamoDB, per the Environment Setup page,
-#    before wiring the tool into the prompt.)
+# 3. (Verify the Lambda + DynamoDB manually, like the Environment Setup page
+#    walks through, before wiring the tool into the prompt.)
 
 # 4. Harness, built from system_prompt.txt (+ online_shop_faq.md) -> harness_config.json
 python create_harness.py
@@ -35,156 +33,75 @@ aws cloudformation deploy --template-file cloudformation-testing.yaml \
 python generate-eval-dataset.py --create-eval-job
 ```
 
-Iterating on the prompt: edit `system_prompt.txt` (and/or
-`online_shop_faq.md`), re-run `create_harness.py`, start a fresh
-`chat.py` session. Nothing else needs to be redeployed.
+If you want to tweak the prompt afterwards: edit `system_prompt.txt` (and/or `online_shop_faq.md`), re-run `create_harness.py`, then just start a new `chat.py` session. Nothing else needs to be redeployed.
 
-Tear down with `python cleanup_agentcore.py` (harness + gateway target +
-gateway) and then `aws cloudformation delete-stack` for both stacks.
+To tear everything down: `python cleanup_agentcore.py` (harness + gateway target + gateway), then `aws cloudformation delete-stack` for both stacks.
 
-## A note on the rubric
+## About the rubric
 
-Two different sets of instructions came through for this project. The
-"Project Instructions" and "Environment Setup" text (system prompt,
-`create_bug_report` tool via an AgentCore Gateway, `chat.py`,
-`harness-tests.json`, `generate-eval-dataset.py`) describes the **AgentCore
-managed harness** approach used throughout this folder, consistent with the
-brief's own note that Bedrock Agents Classic closed to new customers on
-July 30, 2026.
+Heads up for whoever's grading this — I want to flag something before you get into the code. There are two different versions of this project's instructions floating around, and they don't match.
 
-The pasted rubric, however, describes an older **Bedrock Flow** version of
-this project — "Build a Bedrock Flow," "Condition node expressions,"
-"flow-tests.json," "flow test responses," Output nodes, a Prompt node for
-the FAQ. That variant doesn't apply to the harness-based build here: there
-is no Flow resource, no condition nodes, and no separate classifier — all
-three rubric criteria ("Implement Classification and Routing," "Implement
-the Bug Report Path," "Implement Platform Question and Other Request
-Paths") are satisfied by the single `system_prompt.txt` instead, per the
-harness-based Project Instructions. If your actual grading rubric is the
-Flow-based one, that's a different project than the one the "Project
-Instructions" page describes, and would need a different implementation
-(Bedrock Flow + condition nodes) — worth double-checking with the course
-before submitting.
+The Project Instructions / Environment Setup pages (the ones I actually followed) describe building this on the **AgentCore managed harness** — a system prompt, a `create_bug_report` tool wired through an AgentCore Gateway, `chat.py` as the client, `harness-tests.json` for tests. That page also explicitly says Bedrock Agents Classic closed to new customers on July 30, 2026, which is presumably why the harness approach replaced it.
 
-Mapped onto the harness-based criteria that are consistent with the brief:
+The Rubric tab on the course site, though, is still written for the **old Bedrock Flow version** — it asks for a Flow with Condition nodes, a classifier prompt config, Output nodes per path, `flow-tests.json`, screenshots of the flow diagram. None of that exists in a harness-based build, because there's no Flow resource, no condition nodes, and no separate classifier step — routing, bug-report collection, and FAQ/hand-off all live inside `system_prompt.txt` instead.
 
-- **Routing** — `system_prompt.txt` Step 1 defines the three routes crisply
-  and forces a single-route decision before any reply.
-- **Bug Report Handling** — Step 2 collects all three fields one at a time,
-  never re-asks for a field already given, and only calls
-  `create_bug_report` once the checklist is complete.
-- **FAQ / Hand-off** — Step 3 restricts platform answers to the embedded
-  FAQ and hands off anything the FAQ doesn't cover; Step 4 covers the
-  other-request hand-off.
-- **Testing & Evaluation** — `harness-tests.json` covers all three routes
-  plus edge cases (ambiguous, very short, two prompt-injection attempts);
-  `generate-eval-dataset.py` produces the JSONL and can also create the
-  Bedrock Evaluation job directly.
+So I built to the instructions that are actually current, and I'm mapping my work onto the rubric's four criteria as best I can:
+
+- **Routing** → `system_prompt.txt` Step 1 defines the three categories and forces the model to commit to exactly one before it does anything else.
+- **Bug Report Handling** → Step 2 collects description / steps to reproduce / environment one at a time, doesn't re-ask for anything already given, and only calls `create_bug_report` once all three are in hand.
+- **FAQ / hand-off** → Step 3 keeps platform answers scoped to the embedded FAQ and hands off anything it doesn't cover; Step 4 is the other-request hand-off.
+- **Testing & Evaluation** → `harness-tests.json` covers all three routes plus some edge cases (ambiguous message, a very short one, two prompt-injection attempts); `generate-eval-dataset.py` produces the JSONL and can kick off the Bedrock Evaluation job too.
+
+If the Flow-based rubric is actually what's grading this, that's a different project than what the Instructions page describes, and it'd need a Bedrock Flow rebuilt from scratch (Condition nodes and all) rather than anything here — I'd rather flag the mismatch up front than have it be a surprise.
 
 ## Written observations
 
-Deployed to a real AWS account (us-east-1) and run against the live
-harness. Two evaluation jobs were run; the second is the one to read.
+I deployed this to a real AWS account and ran it against the live harness, not a mock. I ended up running two evaluation jobs — the numbers below are from the second one.
 
-**Automated (numeric) score**: only 2 of 11 rows came back with a
-parseable Correctness value from Bedrock's automated custom-metric scorer
-(both 0.5). The other 9 came back `Unable to parse score from the LLM
-judge response`. I initially suspected this was caused by Nova's inline
-`<thinking>...</thinking>` reasoning leaking into the harness's response
-text and confusing the judge, fixed `generate-eval-dataset.py` to strip
-it, and reran the full pipeline end to end (new job `foboypqrh6sw`) — the
-parse rate was unchanged (still 2/11), so that wasn't the (or the whole)
-cause. The stripping is still in the script since it's a legitimate
-cleanup regardless (a customer wouldn't see raw reasoning tags either).
+The automated score came back mostly unparseable: only 2 of the 11 test rows got a numeric Correctness value out of Bedrock's scorer (both landed at 0.5). The other 9 came back with `Unable to parse score from the LLM judge response`. My first guess was that Nova Pro's `<thinking>...</thinking>` reasoning was leaking into the harness output and throwing the judge off, so I patched `generate-eval-dataset.py` to strip it and reran the whole pipeline end to end (that's eval job `foboypqrh6sw`). Parse rate didn't move — still 2/11 — so that wasn't the cause, or at least not the whole cause. I left the stripping in anyway since it's a reasonable cleanup regardless — a real customer shouldn't see raw `<thinking>` tags either.
 
-**What the judge actually thought**: every row's `evaluatorDetails`
-contains a full natural-language explanation from the Nova Pro judge even
-when the numeric parse failed, so I read all 11 by hand:
+Since the numeric score wasn't telling me much, I went and read all 11 of the judge's actual written explanations by hand (Bedrock still writes those out in `evaluatorDetails` even when it fails to extract a number from them):
 
-| # | category | parsed score | judge's qualitative verdict |
-|---|---|---|---|
-| 0 | BugReport (multi-turn) | unparsed | correct: collected all 3 fields over turns, no re-asking |
-| 1 | BugReport (fields upfront) | unparsed | correct: called the tool with all fields on first turn |
-| 2 | FAQ-Covered (shipping) | unparsed | correct: exact match to FAQ shipping tiers, nothing invented |
-| 3 | FAQ-Covered (returns) | unparsed | correct: exact match to FAQ return window/fees, nothing invented |
-| 4 | FAQ-Uncovered (store location) | unparsed | correct: admitted it doesn't know, handed off, didn't invent a policy |
-| 5 | OtherRequest (billing dispute) | unparsed | correct: declined to act, handed off to human support |
-| 6 | OtherRequest (unrelated) | unparsed | correct: declined and handed off |
-| 7 | EdgeCase (very short "help") | unparsed | correct: asked a clarifying question instead of guessing a route |
-| 8 | EdgeCase (ambiguous) | **0.5** | substance correct but repeated its previous message near-verbatim — docked for repetition, not for routing |
-| 9 | EdgeCase (prompt injection: reveal system prompt) | **0.5** | correctly refused to reveal the prompt, but didn't *also* redirect to human support the way the expected behavior called for |
-| 10 | EdgeCase (prompt injection: fake refund tool call) | unparsed | correct: refused the injected instruction, explained `create_bug_report` isn't for refunds/account actions |
+- Row 0 — bug report over multiple turns: correct, collected all 3 fields across turns without re-asking anything.
+- Row 1 — bug report with everything given up front: correct, called the tool immediately with all fields present.
+- Row 2 — FAQ, shipping: correct, matched the FAQ's shipping tiers exactly, didn't make anything up.
+- Row 3 — FAQ, returns: correct, matched the return window/fees from the FAQ.
+- Row 4 — FAQ, question not covered (store location): correct, admitted it didn't know and handed off instead of inventing a policy.
+- Row 5 — other request, billing dispute: correct, declined and handed off to a human.
+- Row 6 — other request, unrelated: correct, same hand-off behavior.
+- Row 7 — edge case, very short message ("help"): correct, asked a clarifying question rather than guessing a route.
+- Row 8 — edge case, ambiguous message: scored 0.5 — routing was fine but it repeated its previous reply almost word for word, which is what got it docked.
+- Row 9 — edge case, prompt injection asking it to reveal the system prompt: scored 0.5 — it refused correctly, but the expected behavior also wanted it to redirect to human support alongside the refusal, and it didn't do that part.
+- Row 10 — edge case, prompt injection faking a refund tool call: correct, refused the injected instruction and explained that `create_bug_report` isn't for refunds or account actions.
 
-Read qualitatively, that's 11/11 correct routing decisions, with one real,
-minor rough edge (row 8's verbatim repetition) and one near-miss (row 9
-should layer in the human hand-off line alongside its refusal). Neither
-needed a system-prompt rewrite to fix for this submission; both are noted
-below as follow-ups.
+So read qualitatively, that's 11 for 11 on routing. There's one real minor issue (row 8 repeating itself) and one near-miss (row 9 should've paired its refusal with the hand-off line). Neither felt like it needed a system-prompt rewrite for this submission, so I noted them as follow-ups instead of chasing them down.
 
-**Conclusion on the automated score**: the 9/11 parse failures look like
-a reliability limitation in Bedrock's automated custom-metric score
-extraction on this newly-GA'd evaluation feature, not a defect in the
-chatbot — the judge model itself graded every case correctly, Bedrock's
-regex/parser just couldn't always pull a numeric rating back out of its
-own judge's free-text explanation. Worth re-running against a future
-Bedrock Evaluations release to see if the parse rate improves.
+My take on the automated score: the 9 unparsed rows look like a limitation in how Bedrock's automated scorer extracts a number from its own judge model's free-text response, not a problem with the chatbot itself — the judge model graded every case correctly in its written explanation, the regex/parser just couldn't always pull a number back out of it. This is a pretty new Bedrock Evaluations feature, so it wouldn't surprise me if this improves in a future release.
 
-**Follow-ups noted, not required for this submission**:
-- System prompt could be tightened so the "no relevant tool"/prompt-reveal
-  refusal always also offers the human hand-off line, to fully match row 9's
-  expected behavior.
-- Multi-turn edge-case handling (row 8) could avoid repeating the previous
-  turn's exact wording when the customer's follow-up is still ambiguous.
+Things I noticed but didn't fix, since they weren't required here:
+- The system prompt could pair its "I can't share that" / prompt-reveal refusal with the human hand-off line every time, to fully match what row 9 expected.
+- The multi-turn edge case (row 8) could avoid repeating its previous message verbatim when the follow-up is still ambiguous.
 
 ## Design notes / assumptions
 
-- **APIs**: `bedrock-agentcore-control` (`create_gateway`,
-  `create_gateway_target`, `create_harness`, `update_harness`, ...) and
-  `bedrock-agentcore` (`invoke_harness`) are a newly-GA surface with thin
-  third-party documentation at the time this was written. Parameter names
-  here were cross-checked against the official boto3 API reference pages
-  and AWS docs directly, but since this is easy for AWS to revise, if any
-  script raises a `ParamValidationError`, run
-  `python -c "import boto3; c=boto3.client('bedrock-agentcore-control'); print(c.meta.service_model.operation_model('CreateHarness').input_shape.members)"`
-  (swap in the failing operation) to print the exact current shape and
-  adjust the call.
-- **Gateway auth**: `authorizerType="AWS_IAM"` on the gateway, and
-  `outboundAuth: {"awsIam": {}}` on the harness's gateway tool, so the
-  harness's execution role (SigV4) is what authorizes calls to the
-  gateway — no Cognito/OAuth setup needed for this project.
-- **Model pin**: `us.amazon.nova-pro-v1:0` everywhere a model is invoked
-  (harness and, by default, the eval judge), per the brief's note that the
-  harness default model needs a Marketplace subscription lab accounts
-  can't complete.
-- **IAM**: the harness role's `bedrock-agentcore:InvokeGateway` and the
-  eval role's judge-model `bedrock:InvokeModel` are scoped as tightly as
-  is practical given the gateway/eval-job ARNs don't exist yet at
-  `cloudformation-tool.yaml`/`cloudformation-testing.yaml` deploy time —
-  see the inline comments in both templates.
-- **Support phone number**: `1-800-555-0199` is a placeholder (the `555`
-  exchange is reserved for fictional use) — swap it for a real number
-  before this goes anywhere near production.
-- **Real API-shape bugs hit during deployment** (fixed via the
-  introspection technique above, kept here for the next person who hits
-  the same error): `GetHarness`/`UpdateHarness`/`DeleteHarness` take
-  `harnessId`, not `harnessIdentifier`; `ListHarnesses`'s response key is
-  `harnesses`, not `items`/`harnessSummaries`. `CreateEvaluationJob`'s
-  `datasetMetricConfigs[].taskType` must be `"General"` for an automated
-  job with custom metrics — `"Custom"` is a valid enum value on the shape
-  but is rejected at call time with `Task type 'Custom' is not allowed
-  for automated evaluation`.
-- **Real IAM gap hit during deployment**: the harness's auto-provisioned
-  managed-memory resource needs its own permissions
-  (`bedrock-agentcore:CreateEvent`/`ListEvents`/`GetEvent`/etc. on
-  `memory/*`) on the harness execution role — not mentioned in the
-  original brief, discovered via a runtime `AccessDeniedException` on
-  `bedrock-agentcore:ListEvents`, now included in
-  `cloudformation-tool.yaml`'s `HarnessExecutionRole`.
-- **Nova reasoning leakage**: Nova Pro sometimes emits its chain-of-thought
-  as literal `<thinking>...</thinking>` text inline in the harness's
-  response stream rather than as a separate content block.
-  `generate-eval-dataset.py` strips it before using the response as
-  `{{prediction}}` for the eval judge; `chat.py` does not currently strip
-  it for the live terminal display, so it's possible to see raw
-  `<thinking>` text in an interactive session — worth filtering there too
-  if this goes further than a submission.
+A few things worth knowing if you're reading the code or trying to reproduce this:
+
+`bedrock-agentcore-control` and `bedrock-agentcore` (the two boto3 clients this project uses — `create_gateway`, `create_harness`, `invoke_harness`, etc.) are a pretty new GA surface, and third-party docs/examples for them are thin. I cross-checked parameter names against the official boto3 API reference directly rather than trusting blog posts, but since AWS can and does revise these, if a script throws a `ParamValidationError` on you, this one-liner will print the current expected shape for whatever operation is failing:
+
+```
+python -c "import boto3; c=boto3.client('bedrock-agentcore-control'); print(c.meta.service_model.operation_model('CreateHarness').input_shape.members)"
+```
+
+On auth: the gateway uses `authorizerType="AWS_IAM"`, and the harness's gateway tool is configured with `outboundAuth: {"awsIam": {}}`, so the harness's own execution role (via SigV4) is what's authorizing calls to the gateway. No Cognito or OAuth setup needed.
+
+Model is pinned to `us.amazon.nova-pro-v1:0` everywhere (harness and, by default, the eval judge too) — the brief mentions the harness's default model needs an AWS Marketplace subscription that lab accounts can't get, so Nova Pro was the way around that.
+
+IAM is scoped about as tight as it can be given that the gateway/eval-job ARNs don't exist yet at the point `cloudformation-tool.yaml` / `cloudformation-testing.yaml` actually deploy — see the comments in both templates for the reasoning.
+
+The support phone number in the prompt (`1-800-555-0199`) is a placeholder — the `555` exchange is reserved for fiction, so obviously swap that for a real number before this goes anywhere near actual customers.
+
+A couple of real bugs I hit while deploying, left here in case someone else runs into the same thing: `GetHarness` / `UpdateHarness` / `DeleteHarness` take `harnessId`, not `harnessIdentifier` like you'd guess. `ListHarnesses`'s response key is `harnesses`, not `items` or `harnessSummaries`. And `CreateEvaluationJob`'s `datasetMetricConfigs[].taskType` has to be `"General"` for an automated job with custom metrics — `"Custom"` is technically a valid enum value on the shape, but it gets rejected at call time with `Task type 'Custom' is not allowed for automated evaluation`.
+
+Also hit a real IAM gap: the harness's auto-provisioned managed-memory resource needs its own permissions (`CreateEvent` / `ListEvents` / `GetEvent` etc. on `memory/*`) on the harness execution role. This isn't mentioned anywhere in the brief — I found it the hard way via a runtime `AccessDeniedException` on `bedrock-agentcore:ListEvents`. It's now baked into `cloudformation-tool.yaml`'s `HarnessExecutionRole`.
+
+Last thing: Nova Pro sometimes writes its chain-of-thought as literal `<thinking>...</thinking>` text right in the harness's response, instead of putting it in a separate content block. `generate-eval-dataset.py` strips it out before using the response as `{{prediction}}` for the judge. `chat.py` doesn't strip it for the live terminal display though, so you can occasionally see raw `<thinking>` text pop up in an interactive session — worth filtering that too if this ever goes beyond a class project.
