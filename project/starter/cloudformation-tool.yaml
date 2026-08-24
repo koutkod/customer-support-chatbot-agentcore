@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Customer Support Chatbot - bug report tool stack.
+  Creates the DynamoDB ticket table, the create_bug_report Lambda function,
+  and the three IAM roles used by the Lambda, the AgentCore Gateway, and the
+  AgentCore managed harness. Deploy with:
+    aws cloudformation deploy --template-file cloudformation-tool.yaml \
+      --stack-name bug-report-tool-stack --capabilities CAPABILITY_NAMED_IAM \
+      --region us-east-1
+
+Parameters:
+  GatewayNamePrefix:
+    Type: String
+    Default: customer-support-gateway
+    Description: >
+      Name (and name prefix) that setup_gateway.py will use when it creates
+      the AgentCore Gateway. Used to scope the gateway role's trust policy.
+      Must match the `gateway_name` used in setup_gateway.py.
+
+Resources:
+  # ---------------------------------------------------------------------
+  # Storage
+  # ---------------------------------------------------------------------
+  BugReportsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-bug-reports"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: ticketId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ticketId
+          KeyType: HASH
+
+  # ---------------------------------------------------------------------
+  # Lambda tool implementation
+  # ---------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteBugReports
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-create-bug-report*"
+              - Sid: WriteTicket
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt BugReportsTable.Arn
+
+  CreateBugReportFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-create-bug-report"
+      Description: "create_bug_report tool - writes a bug ticket to DynamoDB"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 128
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref BugReportsTable
+      # NOTE: keep this inline copy in sync with create_bug_report.py.
+      # If you change one, change the other, or redeploy with:
+      #   aws lambda update-function-code --function-name <name> --zip-file fileb://function.zip
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import os
+          import uuid
+          from datetime import datetime, timezone
+
+          import boto3
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          dynamodb = boto3.resource("dynamodb")
+
+          REQUIRED_FIELDS = ("description", "stepsToReproduce", "environment")
+
+
+          class MissingFieldError(Exception):
+              pass
+
+
+          def _validate(event):
+              if not isinstance(event, dict):
+                  raise MissingFieldError(
+                      f"Expected a JSON object with {REQUIRED_FIELDS}, got: {type(event).__name__}"
+                  )
+              missing = [
+                  field for field in REQUIRED_FIELDS
+                  if not isinstance(event.get(field), str) or not event.get(field).strip()
+              ]
+              if missing:
+                  raise MissingFieldError(
+                      f"Missing or empty required field(s): {', '.join(missing)}. "
+                      f"All of {REQUIRED_FIELDS} are required."
+                  )
+
+
+          def handler(event, context):
+              logger.info("Received event: %s", json.dumps(event))
+
+              table_name = os.environ["TABLE_NAME"]
+              _validate(event)
+
+              ticket_id = f"BUG-{uuid.uuid4().hex[:8].upper()}"
+              now = datetime.now(timezone.utc).isoformat()
+
+              item = {
+                  "ticketId": ticket_id,
+                  "description": event["description"].strip(),
+                  "stepsToReproduce": event["stepsToReproduce"].strip(),
+                  "environment": event["environment"].strip(),
+                  "status": "OPEN",
+                  "createdAt": now,
+              }
+
+              table = dynamodb.Table(table_name)
+              table.put_item(Item=item)
+
+              logger.info("Created bug report ticket: %s", ticket_id)
+              return item
+
+  CreateBugReportFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-create-bug-report"
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------------
+  # AgentCore Gateway role - assumed by the Gateway service to invoke the
+  # Lambda on the model's behalf.
+  # ---------------------------------------------------------------------
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-gateway-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/${GatewayNamePrefix}*"
+      Policies:
+        - PolicyName: InvokeBugReportLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt CreateBugReportFunction.Arn
+
+  # ---------------------------------------------------------------------
+  # AgentCore managed harness execution role - assumed by the harness to
+  # call the Bedrock model and to invoke the Gateway's tools.
+  # ---------------------------------------------------------------------
+  HarnessExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-harness-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      Policies:
+        - PolicyName: InvokeNovaProAndGateway
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeNovaProModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  # us.amazon.nova-pro-v1:0 is a cross-region inference
+                  # profile; grant both the profile and the underlying
+                  # foundation model in every region it can route to.
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0"
+                  - "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0"
+                  - "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0"
+                  - "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
+              - Sid: InvokeGateway
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeGateway
+                Resource: !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*"
+              - Sid: ManageHarnessMemory
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:CreateEvent
+                  - bedrock-agentcore:ListEvents
+                  - bedrock-agentcore:GetEvent
+                  - bedrock-agentcore:DeleteEvent
+                  - bedrock-agentcore:ListSessions
+                  - bedrock-agentcore:ListActors
+                  - bedrock-agentcore:GetMemory
+                  - bedrock-agentcore:ListMemories
+                Resource: !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/*"
+              - Sid: WriteHarnessLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/*"
+
+Outputs:
+  BugReportsTableName:
+    Description: DynamoDB table storing bug report tickets
+    Value: !Ref BugReportsTable
+
+  CreateBugReportFunctionArn:
+    Description: ARN of the create_bug_report Lambda function
+    Value: !GetAtt CreateBugReportFunction.Arn
+
+  GatewayRoleArn:
+    Description: Role the AgentCore Gateway assumes to invoke the Lambda
+    Value: !GetAtt GatewayRole.Arn
+
+  HarnessExecutionRoleArn:
+    Description: Role the AgentCore managed harness assumes
+    Value: !GetAtt HarnessExecutionRole.Arn
